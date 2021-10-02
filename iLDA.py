@@ -19,7 +19,8 @@ class iLDA(LdaModel):
             iterations=50, gamma_threshold=0.001, minimum_probability=0.01,
             random_state=None, ns_conf=None, minimum_phi_value=0.01,
             per_word_topics=False, callbacks=None, dtype=np.float32, 
-            hierarchy_levels=3):
+            hierarchy_levels=3, level_two_max_topics=5, 
+            level_three_max_topics=5):
         
         super().__init__(corpus, num_topics, id2word,
             distributed, chunksize, passes, update_every,
@@ -27,8 +28,14 @@ class iLDA(LdaModel):
             iterations, gamma_threshold, minimum_probability,
             random_state, ns_conf, minimum_phi_value,
             per_word_topics, callbacks, dtype)
-        
+
+        # number of levels to the hierarchy.
         self.hierarchy_levels = hierarchy_levels
+
+        # max level of topics you want each cluster in
+        # first hierarhcy to be split into. Minimum is 2.
+        self.level_two_range = level_two_max_topics
+        self.level_three_range = level_three_max_topics
     
 lda = iLDA(common_corpus, num_topics=10)
 topics = lda.get_topics()
