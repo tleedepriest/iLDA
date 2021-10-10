@@ -11,6 +11,7 @@ print(common_texts)
 common_dictionary = Dictionary(common_texts)
 common_corpus = [common_dictionary.doc2bow(text) for text in common_texts]
 
+
 class iLDA():
     """
     This class will use LdaModel in a recursive fashion. Using the first
