@@ -23,7 +23,8 @@ class iLDA(LdaModel):
             iterations=50, gamma_threshold=0.001, minimum_probability=0.01,
             random_state=None, ns_conf=None, minimum_phi_value=0.01,
             per_word_topics=False, callbacks=None, dtype=np.float32,
-            hierarchy_levels=3, tokens=None, **kwargs):
+            hierarchy_levels=3, tokens=None, 
+            model_eval_info=None, original_lda_model=None, **kwargs):
         
         super().__init__(corpus, num_topics, id2word,
             distributed, chunksize, passes, update_every,
@@ -56,13 +57,70 @@ class iLDA(LdaModel):
         self.dtype = dtype
         self.hierarchy_levels = len(kwargs.items())
         self.tokens = tokens
+        
+        if model_eval_info is None:
+            self.model_eval_info = {
+                    "level_one": 
+                    {
+                        "models":[],
+                        "num_topics_coherence":[],
+                        "optimal_model": None
+                }
+                    }
 
-    def get_first_set_models(self):
+    def pick_optimal_model(self):
+        """
+        Algorithm to hueristically pick an optimal number of topics. Want to
+        Bias towards smaller numbers
+        """
+        changes = []
+
+    def vis_topics_coherences(self, level):
+        """
+        Visualizes coherence vs number of topics.
+        """
+        num_tops_cos = self.model_eval_info[level]["num_topics_coherence"]
+        if num_tops_cos !=[]:
+            num_topics = [num_top_co[0] for num_top_co in num_tops_cos]
+            coherence = [num_top_co[1] for num_top_co in num_tops_cos]
+        
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+
+            ax.plot(num_topics, coherence)
+            coherence = [round(co, 3) for co in coherence]
+            for xy in zip(num_topics, coherence):
+                ax.annotate('(%s, %s)' % xy, xy=xy, textcoords='data')
+            ax.grid()
+            plt.savefig("test.png")
+        else:
+            # TO-DO: change this to better type of error?
+            raise ValueError("There are no topics or coherence values to\n"
+            "Visualize! You have to run train_models and\n"
+            "train_coherence first!")
+
+    def train_coherence(self, level):
+        """
+        returns a list of tuples with the number of topics and the coherence
+        This allows for easy evaluation of models.
+        """
+        models = self.model_eval_info[level]["models"]
+        for num_topic, model in zip(
+            range(2, self.seed_model_max_topics+1), 
+            models):
+            cm = CoherenceModel(
+                    model=model,
+                    coherence='c_v',
+                    texts=self.tokens)
+            coherence = cm.get_coherence()
+            self.model_eval_info[level]["num_topics_coherence"].append(
+                    (num_topic, coherence))
+
+    def train_models(self, level):
         """
         Instantiates the same model through a range of the number of topics.
         Returns a list of LDAmodels
         """
-        models = []
         for topic_num in range(2, 
                 self.seed_model_max_topics+1,self.seed_model_step):
 
@@ -73,38 +131,9 @@ class iLDA(LdaModel):
                     self.gamma_threshold, self.minimum_probability,
                     self.random_state, self.ns_conf, self.minimum_phi_value,
                     self.per_word_topics, self.callbacks, self.dtype)
-            models.append(model)
-        return models
+            self.model_eval_info[level]["models"].append(model)
 
-    def get_models_coherence(self):
-        """
-        returns a list of tuples with the number of topics and the coherence
-        This allows for easy evaluation of models.
-        """
-        models = self.get_first_set_models()
-        num_topics_coherence = []
-        
-        for num_topic, model in zip(
-            range(2, self.seed_model_max_topics+1), 
-            models):
-            cm = CoherenceModel(
-                    model=model,
-                    coherence='c_v',
-                    texts=self.tokens)
-            coherence = cm.get_coherence()
-            num_topics_coherence.append((num_topic, coherence))
-        return num_topics_coherence
-
-    def visualize_coherence(self):
-        num_topics_coherence = self.get_models_coherence()
-        num_topics = [num_topic_coherence[0] for 
-                num_topic_coherence in num_topics_coherence]
-
-        coherence = [num_topic_coherence[1] for 
-                num_topic_coherence in num_topics_coherence]
-        
-        plt.plot(num_topics, coherence)
-        plt.savefig("test.png")
+# Preprocessing functions
 def get_tokens(doc_raw_text):
     """
     yields text per document
@@ -128,6 +157,7 @@ def get_doc_paths(docs_dir_path):
         docs_dir_path).glob("**/*") if x.is_file()]
 
 def main():
+    # first retrieve text, tokens, dictionary, and corpus
     texts = []
     docs_dir_path = "20news_home/20news-bydate-test/alt.atheism"
     doc_paths = get_doc_paths(docs_dir_path)
@@ -154,7 +184,10 @@ def main():
             id2word=dct,
             tokens=texts_tokens,
             **kwargs)
-    ilda.visualize_coherence()
+    ilda.train_models(level="level_one")
+    ilda.train_coherence(level="level_one")
+    ilda.vis_topics_coherences(level="level_one")
+
     #print(ilda.get_models_coherence())
     #print(ilda.get_first_set_models())
 
