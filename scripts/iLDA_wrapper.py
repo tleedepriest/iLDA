@@ -1,20 +1,21 @@
 """
-will define a wrapper around the LDA Model of gensim
+will define a wrapper around the LDA Model of gensim for a template of a text
+processing pipeline.
 """
 import numpy as np
 from pathlib import Path
+import matplotlib.pyplot as plt
 from gensim.models.ldamodel import LdaModel
 from gensim.test.utils import common_texts
 from gensim.corpora.dictionary import Dictionary
 from gensim.models.coherencemodel import CoherenceModel
 from gensim.parsing.preprocessing import split_on_space
+from gensim.parsing.preprocessing import preprocess_documents
 
-# Create a corpus from a list of texts
-print(common_texts)
-common_dictionary = Dictionary(common_texts)
-common_corpus = [common_dictionary.doc2bow(text) for text in common_texts]
-print(common_corpus)
 class iLDA(LdaModel):
+    """
+    inherits all attributes from LdaModel.
+    """
 
     def __init__(self, corpus=None, num_topics=100, id2word=None,
             distributed=False, chunksize=2000, passes=1, update_every=1,
@@ -22,7 +23,7 @@ class iLDA(LdaModel):
             iterations=50, gamma_threshold=0.001, minimum_probability=0.01,
             random_state=None, ns_conf=None, minimum_phi_value=0.01,
             per_word_topics=False, callbacks=None, dtype=np.float32,
-            hierarchy_levels=3, docs_dir_path=None, **kwargs):
+            hierarchy_levels=3, tokens=None, **kwargs):
         
         super().__init__(corpus, num_topics, id2word,
             distributed, chunksize, passes, update_every,
@@ -54,14 +55,7 @@ class iLDA(LdaModel):
         self.callbacks = callbacks
         self.dtype = dtype
         self.hierarchy_levels = len(kwargs.items())
-        self.docs_dir_path = docs_dir_path
-
-    def get_tokens(self):
-        """
-        tokenize text
-        """
-        tokens = split_on_space(self.corpus)
-        print(tokens)
+        self.tokens = tokens
 
     def get_first_set_models(self):
         """
@@ -70,7 +64,7 @@ class iLDA(LdaModel):
         """
         models = []
         for topic_num in range(2, 
-                self.seed_model_max_topics,self.seed_model_step):
+                self.seed_model_max_topics+1,self.seed_model_step):
 
             model = LdaModel(self.corpus, topic_num, self.id2word,
                     self.distributed, self.chunksize, self.passes, 
@@ -79,57 +73,90 @@ class iLDA(LdaModel):
                     self.gamma_threshold, self.minimum_probability,
                     self.random_state, self.ns_conf, self.minimum_phi_value,
                     self.per_word_topics, self.callbacks, self.dtype)
-            print(model)
             models.append(model)
         return models
 
-    def evaluate_models_on_coherence(self):
+    def get_models_coherence(self):
+        """
+        returns a list of tuples with the number of topics and the coherence
+        This allows for easy evaluation of models.
+        """
         models = self.get_first_set_models()
-        for model in models:
+        num_topics_coherence = []
+        
+        for num_topic, model in zip(
+            range(2, self.seed_model_max_topics+1), 
+            models):
             cm = CoherenceModel(
                     model=model,
                     coherence='c_v',
-                    texts=common_texts)
+                    texts=self.tokens)
             coherence = cm.get_coherence()
-            print(coherence)
+            num_topics_coherence.append((num_topic, coherence))
+        return num_topics_coherence
 
-    def get_doc_paths(self):
-        """
-        return all files in a given directory
-        """
-        return [x for x in Path(
-            self.docs_dir_path).glob("**/*") if x.is_file()]
+    def visualize_coherence(self):
+        num_topics_coherence = self.get_models_coherence()
+        num_topics = [num_topic_coherence[0] for 
+                num_topic_coherence in num_topics_coherence]
 
-    def yield_raw_text(self):
-        """
-        yield text for documents
-        """
-        for path in self.get_doc_paths():
-            with path.open() as fh:
-                text = fh.read()
-            yield text
+        coherence = [num_topic_coherence[1] for 
+                num_topic_coherence in num_topics_coherence]
+        
+        plt.plot(num_topics, coherence)
+        plt.savefig("test.png")
+def get_tokens(doc_raw_text):
+    """
+    yields text per document
+    """
+    doc_tokens = split_on_space(doc_raw_text)
+    return doc_tokens
 
+def get_raw_text(doc_path):
+    """
+    yield text for documents
+    """
+    with doc_path.open() as fh:
+        text = fh.read()
+        return text
+
+def get_doc_paths(docs_dir_path):
+    """
+    return all files in a given directory
+    """
+    return [x for x in Path(
+        docs_dir_path).glob("**/*") if x.is_file()]
 
 def main():
+    texts = []
+    docs_dir_path = "20news_home/20news-bydate-test/alt.atheism"
+    doc_paths = get_doc_paths(docs_dir_path)
+    for doc_path in doc_paths:
+        raw_text = get_raw_text(doc_path)
+        print(raw_text)
+        texts.append(raw_text)
+        #tokens = get_tokens(raw_text)
+        #texts_tokens.append(tokens)
+    texts_tokens = preprocess_documents(texts)
+    print(texts_tokens)
+    dct = Dictionary(texts_tokens)
+    corpus = [dct.doc2bow(text) for text in texts_tokens]
+
     kwargs = {
             "seed_model_max_topics":20,
             "seed_model_step":1,
             "level_one_max_splits": 5,
             "level_two_max_splits": 5
-            }
-    docs_dir_path = "20news_home/20news-bydate-test/alt.atheism"
-
-    ilda = iLDA(common_corpus, 
+            } 
+    
+    ilda = iLDA(corpus, 
             num_topics=5, 
-            id2word=common_dictionary,
-            docs_dir_path = docs_dir_path,
+            id2word=dct,
+            tokens=texts_tokens,
             **kwargs)
-    ilda.evaluate_models_on_coherence()
-    paths = ilda.get_doc_paths()
-    text_iter = ilda.yield_raw_text()
-    for text in text_iter:
-        print(text)
-    #ilda.get_tokens()
+    ilda.visualize_coherence()
+    #print(ilda.get_models_coherence())
+    #print(ilda.get_first_set_models())
 
 if __name__ == "__main__":
     main()
