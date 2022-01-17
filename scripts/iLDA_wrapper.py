@@ -2,6 +2,7 @@
 will define a wrapper around the LDA Model of gensim for a template of a text
 processing pipeline.
 """
+import re
 import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
@@ -9,9 +10,11 @@ from gensim.models.ldamodel import LdaModel
 from gensim.test.utils import common_texts
 from gensim.corpora.dictionary import Dictionary
 from gensim.models.coherencemodel import CoherenceModel
-from gensim.parsing.preprocessing import split_on_space
-from gensim.parsing.preprocessing import preprocess_documents
-
+from gensim.parsing.preprocessing import split_on_space, preprocess_string, strip_tags, strip_punctuation, strip_multiple_whitespaces, strip_short, remove_stopwords
+from gensim.parsing.preprocessing import preprocess_string
+from gensim.models import Phrases
+#from gensim.parsing.preprocessing import preprocess_documents
+from kneed import KneeLocator
 class iLDA(LdaModel):
     """
     inherits all attributes from LdaModel.
@@ -23,9 +26,9 @@ class iLDA(LdaModel):
             iterations=50, gamma_threshold=0.001, minimum_probability=0.01,
             random_state=None, ns_conf=None, minimum_phi_value=0.01,
             per_word_topics=False, callbacks=None, dtype=np.float32,
-            hierarchy_levels=3, tokens=None, 
+            hierarchy_levels=3, tokens=None,
             model_eval_info=None, original_lda_model=None, **kwargs):
-        
+
         super().__init__(corpus, num_topics, id2word,
             distributed, chunksize, passes, update_every,
             alpha, eta, decay, offset, eval_every,
@@ -34,8 +37,8 @@ class iLDA(LdaModel):
             per_word_topics, callbacks, dtype)
 
         # number of levels to the hierarchy.
-        
-        self.__dict__.update(kwargs) 
+
+        self.__dict__.update(kwargs)
         self.corpus = corpus
         self.num_topics = num_topics
         self.id2word = id2word
@@ -57,10 +60,10 @@ class iLDA(LdaModel):
         self.dtype = dtype
         self.hierarchy_levels = len(kwargs.items())
         self.tokens = tokens
-        
+
         if model_eval_info is None:
             self.model_eval_info = {
-                    "level_one": 
+                    "level_one":
                     {
                         "models":[],
                         "num_topics_coherence":[],
@@ -68,36 +71,62 @@ class iLDA(LdaModel):
                 }
                     }
 
-    def pick_optimal_model(self):
+    def get_num_topics(self, level):
+        num_tops_cos = self.model_eval_info[level]["num_topics_coherence"]
+        return [num_top_co[0] for num_top_co in num_tops_cos]
+
+    def get_coherences(self, level):
+        num_tops_cos = self.model_eval_info[level]["num_topics_coherence"]
+        return [num_top_co[1] for num_top_co in num_tops_cos]
+
+    def find_optimal_model(self, level):
+        models = self.model_eval_info[level]["models"]
+        (optimal_topics,
+         optimal_model_index) = self.find_optimal_topics(level)
+        return models[optimal_model_index]
+
+    def find_optimal_topics(self, level):
         """
-        Algorithm to hueristically pick an optimal number of topics. Want to
-        Bias towards smaller numbers
+        Returns the value of the optimal topics and the index
+        of the value in the list of num_topics. We return this so that
+        we can get the optimal model from the list of models using the
+        same index as the index of the number of optimal topics.
         """
-        changes = []
+        num_topics = self.get_num_topics(level)
+        coherence = self.get_coherences(level)
+        if num_topics!=[]:
+            kneedle = KneeLocator(num_topics, coherence, curve='concave')
+            optimal_topics = int(kneedle.knee)
+            return kneedle.knee,  num_topics.index(optimal_topics)
+
+        # TO-DO: change this to better type of error?
+        raise ValueError("There are no topics or coherence values\n"
+                         "! You have to run train_models and\n"
+                         "train_coherence first!")
 
     def vis_topics_coherences(self, level):
         """
         Visualizes coherence vs number of topics.
         """
-        num_tops_cos = self.model_eval_info[level]["num_topics_coherence"]
-        if num_tops_cos !=[]:
-            num_topics = [num_top_co[0] for num_top_co in num_tops_cos]
-            coherence = [num_top_co[1] for num_top_co in num_tops_cos]
-        
+        num_topics = self.get_num_topics(level)
+        coherence = self.get_coherences(level)
+        if num_topics!=[]:
             fig = plt.figure()
             ax = fig.add_subplot(111)
 
             ax.plot(num_topics, coherence)
+            optimal_topics, _ = self.find_optimal_topics(level)
             coherence = [round(co, 3) for co in coherence]
             for xy in zip(num_topics, coherence):
                 ax.annotate('(%s, %s)' % xy, xy=xy, textcoords='data')
             ax.grid()
+            plt.axvline(optimal_topics)
             plt.savefig("test.png")
-        else:
-            # TO-DO: change this to better type of error?
-            raise ValueError("There are no topics or coherence values to\n"
-            "Visualize! You have to run train_models and\n"
-            "train_coherence first!")
+            return None
+        # TO-DO: change this to better type of error?
+        raise ValueError("There are no topics or coherence values to\n"
+                         "Visualize! You have to run train_models and\n"
+                         "train_coherence first!")
 
     def train_coherence(self, level):
         """
@@ -106,7 +135,7 @@ class iLDA(LdaModel):
         """
         models = self.model_eval_info[level]["models"]
         for num_topic, model in zip(
-            range(2, self.seed_model_max_topics+1), 
+            range(2, self.seed_model_max_topics+1, self.seed_model_step),
             models):
             cm = CoherenceModel(
                     model=model,
@@ -121,17 +150,18 @@ class iLDA(LdaModel):
         Instantiates the same model through a range of the number of topics.
         Returns a list of LDAmodels
         """
-        for topic_num in range(2, 
-                self.seed_model_max_topics+1,self.seed_model_step):
+        for topic_num in range(2,
+                self.seed_model_max_topics+1, self.seed_model_step):
 
             model = LdaModel(self.corpus, topic_num, self.id2word,
-                    self.distributed, self.chunksize, self.passes, 
-                    self.update_every, self.alpha, self.eta, self.decay, 
-                    self.offset, self.eval_every, self.iterations, 
+                    self.distributed, self.chunksize, self.passes,
+                    self.update_every, self.alpha, self.eta, self.decay,
+                    self.offset, self.eval_every, self.iterations,
                     self.gamma_threshold, self.minimum_probability,
                     self.random_state, self.ns_conf, self.minimum_phi_value,
                     self.per_word_topics, self.callbacks, self.dtype)
             self.model_eval_info[level]["models"].append(model)
+
 
 # Preprocessing functions
 def get_tokens(doc_raw_text):
@@ -149,6 +179,21 @@ def get_raw_text(doc_path):
         text = fh.read()
         return text
 
+def remove_emails(text):
+    """
+    This removes values in enclosed < >
+    """
+    return re.sub(r"\S*@\S*\s?", "", text)
+
+def remove_in_article(text):
+    return re.sub(r"In article.+writes:", "", text)
+
+def remove_names(text):
+    return re.sub(r"[A-Z][a-z]{1, 15}\s[A-Z][a-z]{1, 15}", "", text)
+
+def remove_char(text, char):
+    return re.sub(r"{char}", "", text)
+
 def get_doc_paths(docs_dir_path):
     """
     return all files in a given directory
@@ -158,36 +203,41 @@ def get_doc_paths(docs_dir_path):
 
 def main():
     # first retrieve text, tokens, dictionary, and corpus
-    texts = []
-    docs_dir_path = "20news_home/20news-bydate-test/alt.atheism"
+    texts_tokens = []
+    custom_filters = [lambda x: x.lower(), strip_tags, strip_punctuation, strip_multiple_whitespaces, remove_stopwords, strip_short]
+    docs_dir_path = "20news_home"
     doc_paths = get_doc_paths(docs_dir_path)
     for doc_path in doc_paths:
         raw_text = get_raw_text(doc_path)
-        print(raw_text)
-        texts.append(raw_text)
-        #tokens = get_tokens(raw_text)
-        #texts_tokens.append(tokens)
-    texts_tokens = preprocess_documents(texts)
+        raw_text = remove_emails(raw_text)
+        raw_text = remove_in_article(raw_text)
+        raw_text = remove_names(raw_text)
+        raw_text = remove_char(raw_text, ">")
+        tokens = preprocess_string(raw_text, filters=custom_filters)
+        texts_tokens.append(tokens)
+
+    bigrams = Phrases(texts_tokens)
+    texts_tokens = [bigrams[tokens] for tokens in texts_tokens]
     print(texts_tokens)
     dct = Dictionary(texts_tokens)
     corpus = [dct.doc2bow(text) for text in texts_tokens]
 
     kwargs = {
-            "seed_model_max_topics":20,
-            "seed_model_step":1,
+            "seed_model_max_topics":10,
+            "seed_model_step":2,
             "level_one_max_splits": 5,
             "level_two_max_splits": 5
-            } 
-    
-    ilda = iLDA(corpus, 
-            num_topics=5, 
+            }
+
+    ilda = iLDA(corpus,
+            num_topics=5,
             id2word=dct,
             tokens=texts_tokens,
             **kwargs)
     ilda.train_models(level="level_one")
     ilda.train_coherence(level="level_one")
     ilda.vis_topics_coherences(level="level_one")
-
+    print(ilda.find_optimal_model(level="level_one"))
     #print(ilda.get_models_coherence())
     #print(ilda.get_first_set_models())
 
