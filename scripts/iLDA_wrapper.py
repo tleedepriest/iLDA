@@ -4,6 +4,7 @@ processing pipeline.
 """
 import re
 import numpy as np
+from numpy.linalg import norm
 from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -91,8 +92,28 @@ class iLDA(LdaModel):
         (optimal_topics,
          optimal_model_index) = self.find_optimal_topics(level)
         optimal_model = models[optimal_model_index]
+        optimal_model = LdaModel.load(optimal_model)
         self.model_eval_info[level]["optimal_model"] = optimal_model
         return optimal_model
+
+#   def find_optimal_topics(self, level):
+#       """
+#       Returns the value of the optimal topics and the index
+#       of the value in the list of num_topics. We return this so that
+#       we can get the optimal model from the list of models using the
+#       same index as the index of the number of optimal topics.
+#       """
+#       num_topics = self.get_num_topics(level)
+#       coherence = self.get_coherences(level)
+#       if num_topics!=[]:
+#           kneedle = KneeLocator(num_topics, coherence, curve='concave')
+#           optimal_topics = int(kneedle.knee)
+#           return kneedle.knee,  num_topics.index(optimal_topics)
+
+       # TO-DO: change this to better type of error?
+#        raise ValueError("There are no topics or coherence values\n"
+#                         "! You have to run train_models and\n"
+#                         "train_coherence first!")
 
     def find_optimal_topics(self, level):
         """
@@ -103,16 +124,26 @@ class iLDA(LdaModel):
         """
         num_topics = self.get_num_topics(level)
         coherence = self.get_coherences(level)
+        distances = []
         if num_topics!=[]:
-            kneedle = KneeLocator(num_topics, coherence, curve='concave')
-            optimal_topics = int(kneedle.knee)
-            return kneedle.knee,  num_topics.index(optimal_topics)
-
+            first_coherence = coherence[0]
+            first_topic = num_topics[0]
+            last_coherence = coherence[-1]
+            last_topic = num_topics[-1]
+            p1 = np.asarray((first_coherence, first_topic))
+            p2 = np.asarray((last_coherence, last_topic))
+            for co, top in zip(coherence, num_topics):
+                p3 = np.asarray((co, top))
+                d = norm(np.cross(p2-p1, p1-p3))/norm(p2-p1)
+                distances.append(d)
+        max_distance = max(distances)
+        max_distance_index = distances.index(max_distance)
+        optimal_topics = num_topics[max_distance_index]
+        return optimal_topics, num_topics.index(optimal_topics)
         # TO-DO: change this to better type of error?
         raise ValueError("There are no topics or coherence values\n"
                          "! You have to run train_models and\n"
                          "train_coherence first!")
-
     def vis_topics_coherences(self, level):
         """
         Visualizes coherence vs number of topics.
@@ -146,6 +177,7 @@ class iLDA(LdaModel):
         for num_topic, model in zip(
             range(2, self.seed_model_max_topics+1, self.seed_model_step),
             models):
+            model = LdaModel.load(model)
             cm = CoherenceModel(
                     model=model,
                     coherence='c_v',
@@ -153,6 +185,7 @@ class iLDA(LdaModel):
             coherence = cm.get_coherence()
             self.model_eval_info[level]["num_topics_coherence"].append(
                     (num_topic, coherence))
+            del model
 
     def train_models(self, level):
         """
@@ -173,8 +206,10 @@ class iLDA(LdaModel):
                     self.gamma_threshold, self.minimum_probability,
                     self.random_state, self.ns_conf, self.minimum_phi_value,
                     self.per_word_topics, self.callbacks, self.dtype)
-            self.model_eval_info[level]["models"].append(model)
-
+            temp_filepath = datapath(f"model_{level}_{topic_num}")
+            model.save(temp_filepath)
+            self.model_eval_info[level]["models"].append(temp_filepath)
+            del model
 
 # Preprocessing functions
 def get_tokens(doc_raw_text):
@@ -262,7 +297,7 @@ def main():
     corpus = [dct.doc2bow(text) for text in texts_tokens]
 
     kwargs = {
-            "seed_model_max_topics":40,
+            "seed_model_max_topics":10,
             "seed_model_step":2,
             "level_one_max_splits": 5,
             "level_two_max_splits": 5
@@ -277,8 +312,6 @@ def main():
     ilda.train_coherence(level="level_one")
     ilda.vis_topics_coherences(level="level_one")
     optimal_model = ilda.find_optimal_model(level="level_one")
-    temp_file = datapath("optimal_model")
-    optimal_model.save(temp_file)
     num_topics = optimal_model.get_topics().shape[0]
     for top in range(0, num_topics):
         topic_terms = optimal_model.get_topic_terms(top)
