@@ -1,6 +1,19 @@
 """
-This script will take care of retrieving the intial model and training it.
+util functions for preprocessing text.
 """
-from pathlib import Path
-from gensim.models.ldamodel import LdaModel
+import re
 
+def remove_emails(text):
+    """
+    This removes values in enclosed < >
+    """
+    return re.sub(r"\S*@\S*\s?", "", text)
+
+def remove_in_article(text):
+    return re.sub(r"In article.+writes:", "", text)
+
+def remove_names(text):
+    return re.sub(r"[A-Z][a-z]{1, 15}\s[A-Z][a-z]{1, 15}", "", text)
+
+def remove_arrow(text):
+    return re.sub(r">", "", text)
