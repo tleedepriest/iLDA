@@ -17,54 +17,37 @@ from gensim.models.coherencemodel import CoherenceModel
 from gensim.parsing.preprocessing import split_on_space, preprocess_string, strip_tags, strip_punctuation, strip_multiple_whitespaces, strip_short, remove_stopwords
 from gensim.parsing.preprocessing import preprocess_string
 from gensim.models import Phrases
-#from gensim.parsing.preprocessing import preprocess_documents
-from kneed import KneeLocator
-class iLDA(LdaModel):
+
+from utils import remove_emails, remove_names, \
+    remove_arrow, remove_in_article
+# from gensim.parsing.preprocessing import preprocess_documents
+# from kneed import KneeLocator
+
+
+class iLDA:
     """
     inherits all attributes from LdaModel.
     """
 
-    def __init__(self, corpus=None, num_topics=100, id2word=None,
-            distributed=False, chunksize=2000, passes=1, update_every=1,
-            alpha='symmetric', eta=None, decay=0.5, offset=1.0, eval_every=10,
-            iterations=50, gamma_threshold=0.001, minimum_probability=0.01,
-            random_state=None, ns_conf=None, minimum_phi_value=0.01,
-            per_word_topics=False, callbacks=None, dtype=np.float32,
-            hierarchy_levels=3, tokens=None,
-            model_eval_info=None, original_lda_model=None, **kwargs):
+    def __init__(self, docs_dir=None,
+                 string_filters=None,
+                 hierarchy_levels=3,
+                 model_eval_info=None,
+                 original_lda_model=None,
+                 **kwargs):
 
-        super().__init__(corpus, num_topics, id2word,
-            distributed, chunksize, passes, update_every,
-            alpha, eta, decay, offset, eval_every,
-            iterations, gamma_threshold, minimum_probability,
-            random_state, ns_conf, minimum_phi_value,
-            per_word_topics, callbacks, dtype)
 
         # number of levels to the hierarchy.
 
         self.__dict__.update(kwargs)
-        self.corpus = corpus
-        self.num_topics = num_topics
-        self.id2word = id2word
-        self.distibuted = distributed
-        self.chunksize = chunksize
-        self.passes = passes
-        self.update_every = update_every
-        self.alpha = alpha
-        self.eta = eta
-        self.decay = decay
-        self.offset = offset
-        self.eval_every = eval_every
-        self.iterations = iterations
-        self.gamma_threshold = gamma_threshold
-        self.ns_conf = ns_conf
-        self.minimum_phi_value = minimum_phi_value
-        self.per_word_topics = per_word_topics
-        self.callbacks = callbacks
-        self.dtype = dtype
         self.hierarchy_levels = len(kwargs.items())
-        self.tokens = tokens
-
+        self.docs_dir = docs_dir
+        self.doc_paths = [x for x in Path(
+            self.docs_dir).glob("**/*") if x.is_file()]
+        self.string_filters = string_filters
+        self.tokens = None
+        self.corpus = None
+        self.id2word = None
         if model_eval_info is None:
             sub_dict = {"models":[],
                         "num_topics_coherence":[],
@@ -75,18 +58,41 @@ class iLDA(LdaModel):
                                     "level_three": sub_dict}
 
     def get_num_topics(self, level):
+        """
+        Parameters
+        --------------
+        level: str
+            'level_one', 'level_two', 'level_three'
+
+        Returns
+        -------------
+            :List[float]
+            A list of topic numbers for each model, ASC order
+        """
         num_tops_cos = self.model_eval_info[level]["num_topics_coherence"]
         return [num_top_co[0] for num_top_co in num_tops_cos]
 
     def get_coherences(self, level):
+        """
+        Parameters
+        --------------
+        level: str
+            'level_one', 'level_two', 'level_three'
+
+        Returns
+        -------------
+            :List[float]
+            A list of coherence values in the same order as ascending
+            topic_number order.
+        """
         num_tops_cos = self.model_eval_info[level]["num_topics_coherence"]
         return [num_top_co[1] for num_top_co in num_tops_cos]
 
+    # TODO: change name to set_optimal_model. Have it only set a value
+    # and return nothing.
     def find_optimal_model(self, level):
         """
-        Returns The optimal model based on the elbow of the coherence
-        vs. the num_topics curve. Sets optimal_model key in mode_eval_info
-        to the optimal model found.
+        Sets "optimal_model value in model_eval_info dictionary"
         """
         models = self.model_eval_info[level]["models"]
         (optimal_topics,
@@ -117,33 +123,56 @@ class iLDA(LdaModel):
 
     def find_optimal_topics(self, level):
         """
-        Returns the value of the optimal topics and the index
-        of the value in the list of num_topics. We return this so that
-        we can get the optimal model from the list of models using the
-        same index as the index of the number of optimal topics.
+        Parameters
+        -------------
+        level: str
+            'level_one', 'level_two', 'level_three'
+        Returns
+        -------------
+        optimal topics: int
+            mumber of topics in optimal_model. int > 2
+
+        optimal_topics_index: int
+        The index in the num_topics list, which is sorted in
+        ascending order.Index can be used to get optimal model
+        in models list
         """
         num_topics = self.get_num_topics(level)
         coherence = self.get_coherences(level)
+        # perpendicular distance each data point is from
+        # a line connecting first and last datapoint.
         distances = []
         if num_topics!=[]:
             first_coherence = coherence[0]
             first_topic = num_topics[0]
             last_coherence = coherence[-1]
             last_topic = num_topics[-1]
+            # will use points to calc vector
             p1 = np.asarray((first_coherence, first_topic))
             p2 = np.asarray((last_coherence, last_topic))
+            # calculate perpendicular distance from data
+            # points in graph to vector between first
+            # and last point.
             for co, top in zip(coherence, num_topics):
                 p3 = np.asarray((co, top))
+                # take cross product between line and
+                # line to point in consideration, and normalize,
+                # to get perpendicular distance datapoint from
+                # graph.
                 d = norm(np.cross(p2-p1, p1-p3))/norm(p2-p1)
                 distances.append(d)
+
         max_distance = max(distances)
         max_distance_index = distances.index(max_distance)
         optimal_topics = num_topics[max_distance_index]
-        return optimal_topics, num_topics.index(optimal_topics)
+        optimal_topics_index =  num_topics.index(optimal_topics)
+        return optimal_topics, optimal_topics_index
         # TO-DO: change this to better type of error?
         raise ValueError("There are no topics or coherence values\n"
                          "! You have to run train_models and\n"
                          "train_coherence first!")
+
+
     def vis_topics_coherences(self, level):
         """
         Visualizes coherence vs number of topics.
@@ -180,8 +209,9 @@ class iLDA(LdaModel):
             model = LdaModel.load(model)
             cm = CoherenceModel(
                     model=model,
-                    coherence='c_v',
-                    texts=self.tokens)
+                    corpus=self.corpus,
+                    texts=self.tokens,
+                    coherence='c_v')
             coherence = cm.get_coherence()
             self.model_eval_info[level]["num_topics_coherence"].append(
                     (num_topic, coherence))
@@ -197,57 +227,89 @@ class iLDA(LdaModel):
                                 self.seed_model_max_topics+1,
                                 self.seed_model_step)]
 
-        for topic_num in topic_nums:
+        elif level == "level_two":
+            topic_nums = [x for x in
+                          range(2, self.level_one_max_topics+1)]
 
-            model = LdaModel(self.corpus, topic_num, self.id2word,
-                    self.distributed, self.chunksize, self.passes,
-                    self.update_every, self.alpha, self.eta, self.decay,
-                    self.offset, self.eval_every, self.iterations,
-                    self.gamma_threshold, self.minimum_probability,
-                    self.random_state, self.ns_conf, self.minimum_phi_value,
-                    self.per_word_topics, self.callbacks, self.dtype)
-            temp_filepath = datapath(f"model_{level}_{topic_num}")
+            optimal_seed_model = self.model_eval_info["level_one"]["optimal_model"]
+
+        for num_topic in topic_nums:
+            model = LdaModel(corpus=self.corpus,
+                             num_topics=num_topic,
+                             id2word=self.id2word)
+            temp_filepath = datapath(f"model_{level}_{num_topic}")
             model.save(temp_filepath)
             self.model_eval_info[level]["models"].append(temp_filepath)
             del model
 
-# Preprocessing functions
-def get_tokens(doc_raw_text):
-    """
-    yields text per document
-    """
-    doc_tokens = split_on_space(doc_raw_text)
-    return doc_tokens
+    def set_attributes(self, with_bigrams):
+        """
+        calls other private methods to set all needed attributes
+        for the class. This should be called first after instantiation
+        """
+        self._set_tokens()
 
-def get_raw_text(doc_path):
-    """
-    yield text for documents
-    """
-    with doc_path.open() as fh:
-        text = fh.read()
-        return text
+        if with_bigrams:
+            self._convert_tokens_to_bigrams()
 
-def remove_emails(text):
-    """
-    This removes values in enclosed < >
-    """
-    return re.sub(r"\S*@\S*\s?", "", text)
+        self._set_id2word()
+        self._set_corpus()
 
-def remove_in_article(text):
-    return re.sub(r"In article.+writes:", "", text)
+    def _set_tokens(self):
+        """
+        """
+        all_tokens = []
+        for doc_path in self.doc_paths:
+            clean_text = self._get_raw_text(doc_path)
+            tokens = self._clean_text_get_tokens(clean_text)
+            all_tokens.append(tokens)
+        self.tokens = all_tokens
 
-def remove_names(text):
-    return re.sub(r"[A-Z][a-z]{1, 15}\s[A-Z][a-z]{1, 15}", "", text)
+    def _convert_tokens_to_bigrams(self):
+        """
+        should be called after set_tokens
+        """
+        bigrams = Phrases(self.tokens)
+        bigram_tokens = [
+            bigrams[doc_tokens] for doc_tokens in self.tokens]
+        self.tokens = bigram_tokens
 
-def remove_char(text, char):
-    return re.sub(r"{char}", "", text)
+    def _set_corpus(self):
+        """
+        set corpus
+        """
+        self.corpus = [
+            self.id2word.doc2bow(doc_token) for doc_token
+            in self.tokens]
 
-def get_doc_paths(docs_dir_path):
-    """
-    return all files in a given directory
-    """
-    return [x for x in Path(
-        docs_dir_path).glob("**/*") if x.is_file()]
+    def _set_id2word(self):
+        """
+        set id2word
+        """
+        dct = Dictionary(self.tokens)
+        self.id2word = dct
+
+    def _clean_text_get_tokens(self, raw_text):
+        """
+        Parameters
+        -------------
+        raw_text: str
+        filters: List[function]
+
+        Returns
+        --------------
+        tokens: List[str]
+        """
+        tokens = preprocess_string(raw_text, filters=self.string_filters)
+        return tokens
+
+    def _get_raw_text(self, doc_path):
+        """
+        yield text for documents
+        """
+        with doc_path.open() as fh:
+            text = fh.read()
+            return text
 
 def format_topics_sentences(ldamodel, corpus, texts, doc_paths):
     # Init output
@@ -276,51 +338,45 @@ def format_topics_sentences(ldamodel, corpus, texts, doc_paths):
 
 def main():
     # first retrieve text, tokens, dictionary, and corpus
-    texts_tokens = []
-    raw_texts = []
-    custom_filters = [lambda x: x.lower(), strip_tags, strip_punctuation, strip_multiple_whitespaces, remove_stopwords, strip_short]
+    string_filters = [remove_emails,
+                      remove_in_article,
+                      remove_names,
+                      remove_arrow,
+                      lambda x: x.lower(),
+                      strip_tags,
+                      strip_punctuation,
+                      strip_multiple_whitespaces,
+                      remove_stopwords,
+                      strip_short]
+
     docs_dir_path = "20news_home"
-    doc_paths = get_doc_paths(docs_dir_path)
-    for doc_path in doc_paths:
-        raw_text = get_raw_text(doc_path)
-        raw_texts.append(raw_text)
-        raw_text = remove_emails(raw_text)
-        raw_text = remove_in_article(raw_text)
-        raw_text = remove_names(raw_text)
-        raw_text = remove_char(raw_text, ">")
-        tokens = preprocess_string(raw_text, filters=custom_filters)
-        texts_tokens.append(tokens)
 
-    bigrams = Phrases(texts_tokens)
-    texts_tokens = [bigrams[tokens] for tokens in texts_tokens]
-    dct = Dictionary(texts_tokens)
-    corpus = [dct.doc2bow(text) for text in texts_tokens]
-
-    kwargs = {
-            "seed_model_max_topics":10,
-            "seed_model_step":2,
-            "level_one_max_splits": 5,
-            "level_two_max_splits": 5
+    # will likely get rid of this, just wanted to explore **kwardg
+    # with setting attributes.
+    kwargs = {"seed_model_max_topics":10,
+              "seed_model_step":2,
+              "level_two_max_topics": 10
             }
 
-    ilda = iLDA(corpus,
-            num_topics=5,
-            id2word=dct,
-            tokens=texts_tokens,
-            **kwargs)
+    ilda = iLDA(docs_dir="20news_home/20news-bydate-test/sci.med",
+                string_filters=string_filters,
+                **kwargs)
+
+    ilda.set_attributes(with_bigrams=True)
     ilda.train_models(level="level_one")
     ilda.train_coherence(level="level_one")
     ilda.vis_topics_coherences(level="level_one")
     optimal_model = ilda.find_optimal_model(level="level_one")
-    num_topics = optimal_model.get_topics().shape[0]
-    for top in range(0, num_topics):
-        topic_terms = optimal_model.get_topic_terms(top)
-        topic_inx = [topic_term[0] for topic_term in topic_terms]
-        words = [dct[id_] for id_ in topic_inx]
-        print(words)
 
-    df = format_topics_sentences(optimal_model, corpus, raw_texts, doc_paths)
-    df.to_csv("test.csv")
+    #num_topics = optimal_model.get_topics().shape[0]
+    #for top in range(0, num_topics):
+    #    topic_terms = optimal_model.get_topic_terms(top)
+    #    topic_inx = [topic_term[0] for topic_term in topic_terms]
+    #    words = [dct[id_] for id_ in topic_inx]
+    #    print(words)
+
+    #df = format_topics_sentences(optimal_model, corpus, raw_texts, doc_paths)
+    #df.to_csv("test.csv")
     # next step in the pipeline is to slice the df into rows by dominant
     # topic value and to train submodels for each of the
     # slices of rows.
