@@ -210,7 +210,7 @@ class iLDA:
         return [num_top_co[1] for num_top_co in num_tops_cos]
 
 
-    def train_models_over_range(self, topic_range):
+    def train_models_over_range(self, topic_range, level):
         """
         trains multiple models to find the optimal model for the firs
         """
@@ -231,7 +231,7 @@ class iLDA:
         trains models. sets models key value to list of models.
         """
         if level == "level_one":
-            self.train_models_over_range(self.level_one_range)
+            self.train_models_over_range(self.level_one_range, level)
         elif level == "level_two":
             optimal_seed_model = self.model_eval_info["level_one"]["optimal_model"]
             # psuedo code
