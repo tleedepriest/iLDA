@@ -26,11 +26,14 @@ from utils import remove_emails, remove_names, \
 
 class iLDA:
     """
-    inherits all attributes from LdaModel.
+    High Level Wrapper around the LDA model from gensim.
     """
 
     def __init__(self, docs_dir=None,
                  string_filters=None,
+                 level_one_range=None,
+                 level_two_range=None,
+                 level_three_range=None,
                  hierarchy_levels=3,
                  model_eval_info=None,
                  original_lda_model=None,
@@ -45,6 +48,10 @@ class iLDA:
         self.doc_paths = [x for x in Path(
             self.docs_dir).glob("**/*") if x.is_file()]
         self.string_filters = string_filters
+        self.level_one_range = level_one_range
+        self.level_two_range = level_two_range
+        self.level_three_range = level_three_range
+
         self.tokens = None
         self.corpus = None
         self.id2word = None
@@ -57,42 +64,16 @@ class iLDA:
                                     "level_two": sub_dict,
                                     "level_three": sub_dict}
 
-    def get_num_topics(self, level):
-        """
-        Parameters
-        --------------
-        level: str
-            'level_one', 'level_two', 'level_three'
-
-        Returns
-        -------------
-            :List[float]
-            A list of topic numbers for each model, ASC order
-        """
-        num_tops_cos = self.model_eval_info[level]["num_topics_coherence"]
-        return [num_top_co[0] for num_top_co in num_tops_cos]
-
-    def get_coherences(self, level):
-        """
-        Parameters
-        --------------
-        level: str
-            'level_one', 'level_two', 'level_three'
-
-        Returns
-        -------------
-            :List[float]
-            A list of coherence values in the same order as ascending
-            topic_number order.
-        """
-        num_tops_cos = self.model_eval_info[level]["num_topics_coherence"]
-        return [num_top_co[1] for num_top_co in num_tops_cos]
 
     # TODO: change name to set_optimal_model. Have it only set a value
     # and return nothing.
     def find_optimal_model(self, level):
         """
-        Sets "optimal_model value in model_eval_info dictionary"
+        Parameters
+        --------------
+
+        Notes:
+        Sets 'optimal_model' value in model_eval_info dictionary"
         """
         models = self.model_eval_info[level]["models"]
         (optimal_topics,
@@ -197,14 +178,95 @@ class iLDA:
                          "Visualize! You have to run train_models and\n"
                          "train_coherence first!")
 
+    def get_num_topics(self, level):
+        """
+        Parameters
+        --------------
+        level: str
+            'level_one', 'level_two', 'level_three'
+
+        Returns
+        -------------
+            :List[float]
+            A list of topic numbers for each model, ASC order
+        """
+        num_tops_cos = self.model_eval_info[level]["num_topics_coherence"]
+        return [num_top_co[0] for num_top_co in num_tops_cos]
+
+    def get_coherences(self, level):
+        """
+        Parameters
+        --------------
+        level: str
+            'level_one', 'level_two', 'level_three'
+
+        Returns
+        -------------
+            :List[float]
+            A list of coherence values in the same order as ascending
+            topic_number order.
+        """
+        num_tops_cos = self.model_eval_info[level]["num_topics_coherence"]
+        return [num_top_co[1] for num_top_co in num_tops_cos]
+
+
+    def train_models_over_range(self, topic_range):
+        """
+        trains multiple models to find the optimal model for the firs
+        """
+        for num_topic in topic_range:
+            model = LdaModel(corpus=self.corpus,
+                             num_topics=num_topic,
+                             id2word=self.id2word)
+            # need to describe more here. include topic num
+            # in addition to level and num_topic..if available..
+            # only available for second and third levels.
+            temp_filepath = datapath(f"model_{level}_{num_topic}")
+            model.save(temp_filepath)
+            self.model_eval_info[level]["models"].append(temp_filepath)
+            del model
+
+    def train_models(self, level):
+        """
+        trains models. sets models key value to list of models.
+        """
+        if level == "level_one":
+            self.train_models_over_range(self.level_one_range)
+        elif level == "level_two":
+            optimal_seed_model = self.model_eval_info["level_one"]["optimal_model"]
+            # psuedo code
+            # ---------------
+            # for group in optimal_seed_model:
+                    # rederive corpus and tokens
+                    # set new model attributes with set_attributes
+                    # method.
+            #       train_models_over_range(self.level_two_range)
+            # going to need to itterate through model with corpus to
+            # get each document and what group. Recreate and set
+            # corpus for each of teh groups and train model range of
+            # models in topic_nums for each group split.
+
+        else:
+            pass
+            # need to itterate over all optimal_two_models,
+            # then split these into groups
+            # then train each group over a range of values.
+            # pseudo code
+            #----------------
+            # for optimal_model in optimal_models:
+            #       for group in optimal_model:
+            #           train_models_over_range(self.level_three_range)
+
+
     def train_coherence(self, level):
         """
-        returns a list of tuples with the number of topics and the coherence
+        returns a list of tuples with the number of topics and the
+        coherence
         This allows for easy evaluation of models.
         """
         models = self.model_eval_info[level]["models"]
         for num_topic, model in zip(
-            range(2, self.seed_model_max_topics+1, self.seed_model_step),
+            self.level_one_range,
             models):
             model = LdaModel.load(model)
             cm = CoherenceModel(
@@ -215,31 +277,6 @@ class iLDA:
             coherence = cm.get_coherence()
             self.model_eval_info[level]["num_topics_coherence"].append(
                     (num_topic, coherence))
-            del model
-
-    def train_models(self, level):
-        """
-        trains models. sets models key value to list of models.
-        """
-        if level == "level_one":
-            topic_nums = [x for x in
-                          range(2,
-                                self.seed_model_max_topics+1,
-                                self.seed_model_step)]
-
-        elif level == "level_two":
-            topic_nums = [x for x in
-                          range(2, self.level_one_max_topics+1)]
-
-            optimal_seed_model = self.model_eval_info["level_one"]["optimal_model"]
-
-        for num_topic in topic_nums:
-            model = LdaModel(corpus=self.corpus,
-                             num_topics=num_topic,
-                             id2word=self.id2word)
-            temp_filepath = datapath(f"model_{level}_{num_topic}")
-            model.save(temp_filepath)
-            self.model_eval_info[level]["models"].append(temp_filepath)
             del model
 
     def set_attributes(self, with_bigrams):
@@ -360,14 +397,21 @@ def main():
 
     ilda = iLDA(docs_dir="20news_home/20news-bydate-test/sci.med",
                 string_filters=string_filters,
+                level_one_range = range(2, 11, 2),
+                level_two_range = None,
+                level_three_range = None,
                 **kwargs)
 
+    # could wrap each of these in luigi pipeline....
+    # would need someway to pass instantiation between
+    # classes...hmmmm
     ilda.set_attributes(with_bigrams=True)
     ilda.train_models(level="level_one")
     ilda.train_coherence(level="level_one")
     ilda.vis_topics_coherences(level="level_one")
-    optimal_model = ilda.find_optimal_model(level="level_one")
-
+    #ilda.find_optimal_model(level="level_one")
+    # for level in ["level_one", "level_two", "level_three"]:
+        # train models, train_coherence, vis, find_optimal_model.
     #num_topics = optimal_model.get_topics().shape[0]
     #for top in range(0, num_topics):
     #    topic_terms = optimal_model.get_topic_terms(top)
