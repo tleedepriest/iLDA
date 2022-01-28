@@ -30,10 +30,9 @@ class iLDA:
     """
 
     def __init__(self, docs_dir=None,
+                 doc_paths=None,
                  string_filters=None,
-                 level_one_range=None,
-                 level_two_range=None,
-                 level_three_range=None,
+                 topic_range=None,
                  hierarchy_levels=3,
                  model_eval_info=None,
                  original_lda_model=None,
@@ -45,12 +44,14 @@ class iLDA:
         self.__dict__.update(kwargs)
         self.hierarchy_levels = len(kwargs.items())
         self.docs_dir = docs_dir
-        self.doc_paths = [x for x in Path(
-            self.docs_dir).glob("**/*") if x.is_file()]
+        # support directory path or list of document paths
+        if self.docs_dir is None:
+            self.doc_paths = doc_paths
+        else:
+            self.doc_paths = [x for x in Path(
+                self.docs_dir).glob("**/*") if x.is_file()]
         self.string_filters = string_filters
-        self.level_one_range = level_one_range
-        self.level_two_range = level_two_range
-        self.level_three_range = level_three_range
+        self.topic_range = topic_range
 
         self.tokens = None
         self.corpus = None
@@ -171,7 +172,7 @@ class iLDA:
                 ax.annotate('(%s, %s)' % xy, xy=xy, textcoords='data')
             ax.grid()
             plt.axvline(optimal_topics)
-            plt.savefig("test.png")
+            plt.savefig(f"{level}_{optimal_topics}.png")
             return None
         # TO-DO: change this to better type of error?
         raise ValueError("There are no topics or coherence values to\n"
@@ -231,7 +232,7 @@ class iLDA:
         trains models. sets models key value to list of models.
         """
         if level == "level_one":
-            self.train_models_over_range(self.level_one_range, level)
+            self.train_models_over_range(self.topic_range, level)
         elif level == "level_two":
             optimal_seed_model = self.model_eval_info["level_one"]["optimal_model"]
             # psuedo code
@@ -257,7 +258,6 @@ class iLDA:
             #       for group in optimal_model:
             #           train_models_over_range(self.level_three_range)
 
-
     def train_coherence(self, level):
         """
         returns a list of tuples with the number of topics and the
@@ -266,7 +266,7 @@ class iLDA:
         """
         models = self.model_eval_info[level]["models"]
         for num_topic, model in zip(
-            self.level_one_range,
+            self.topic_range,
             models):
             model = LdaModel.load(model)
             cm = CoherenceModel(
@@ -309,7 +309,11 @@ class iLDA:
         bigrams = Phrases(self.tokens)
         bigram_tokens = [
             bigrams[doc_tokens] for doc_tokens in self.tokens]
-        self.tokens = bigram_tokens
+        trigrams = Phrases(bigram_tokens)
+        trigram_tokens = [
+            trigrams[doc_token] for doc_token in bigram_tokens]
+        print(trigram_tokens)
+        self.tokens = trigram_tokens
 
     def _set_corpus(self):
         """
@@ -348,29 +352,29 @@ class iLDA:
             text = fh.read()
             return text
 
-def format_topics_sentences(ldamodel, corpus, texts, doc_paths):
-    # Init output
-    sent_topics_df = pd.DataFrame()
-
-    # Get main topic in each document
-    for i, row in enumerate(ldamodel[corpus]):
-        row = sorted(row, key=lambda x: (x[1]), reverse=True)
-        # Get the Dominant topic, Perc Contribution and Keywords for each document
-        for j, (topic_num, prop_topic) in enumerate(row):
-            if j == 0:  # => dominant topic
-                wp = ldamodel.show_topic(topic_num)
-                topic_keywords = ", ".join([word for word, prop in wp])
-                sent_topics_df = sent_topics_df.append(pd.Series([int(topic_num), round(prop_topic,4), topic_keywords]), ignore_index=True)
-            else:
-                break
-    sent_topics_df.columns = ['Dominant_Topic', 'Perc_Contribution', 'Topic_Keywords']
-
-    # Add original text to the end of the output
-    contents = pd.Series(texts)
-    doc_paths = pd.Series(doc_paths)
-    sent_topics_df = pd.concat(
-        [doc_paths, sent_topics_df, contents], axis=1)
-    return sent_topics_df
+    def format_topics_sentences(self, ldamodel, corpus, tokens, doc_paths):
+        data_dict = {'dom_topic':[],
+                     'perc_contribution': [],
+                     'topic_keywords':[]}
+        # Get main topic in each document
+        for i, row in enumerate(ldamodel[corpus]):
+            row = sorted(row, key=lambda x: (x[1]), reverse=True)
+            # Get the Dominant topic, Perc Contribution and Keywords for each document
+            for j, (topic_num, prop_topic) in enumerate(row):
+                if j == 0:  # => dominant topic
+                    wp = ldamodel.show_topic(topic_num)
+                    topic_keywords = ", ".join([word for word, prop in wp])
+                    data_dict['dom_topic'].append(int(topic_num))
+                    data_dict['perc_contribution'].append(
+                        round(prop_topic,4))
+                    data_dict['topic_keywords'].append(topic_keywords)
+                else:
+                    break
+        tokens = ['  '.join(tok) for tok in tokens]
+        data_dict['tokens'] = tokens
+        data_dict['doc_path'] = doc_paths
+        sent_topics_df = pd.DataFrame.from_dict(data_dict)
+        return sent_topics_df
 
 
 def main():
@@ -386,8 +390,6 @@ def main():
                       remove_stopwords,
                       strip_short]
 
-    docs_dir_path = "20news_home"
-
     # will likely get rid of this, just wanted to explore **kwardg
     # with setting attributes.
     kwargs = {"seed_model_max_topics":10,
@@ -395,11 +397,9 @@ def main():
               "level_two_max_topics": 10
             }
 
-    ilda = iLDA(docs_dir="20news_home/20news-bydate-test/sci.med",
+    ilda = iLDA(docs_dir="20news_home/",
                 string_filters=string_filters,
-                level_one_range = range(2, 11, 2),
-                level_two_range = None,
-                level_three_range = None,
+                topic_range = range(2, 40, 2),
                 **kwargs)
 
     # could wrap each of these in luigi pipeline....
@@ -409,26 +409,39 @@ def main():
     ilda.train_models(level="level_one")
     ilda.train_coherence(level="level_one")
     ilda.vis_topics_coherences(level="level_one")
-    #ilda.find_optimal_model(level="level_one")
-    # for level in ["level_one", "level_two", "level_three"]:
-        # train models, train_coherence, vis, find_optimal_model.
-    #num_topics = optimal_model.get_topics().shape[0]
-    #for top in range(0, num_topics):
-    #    topic_terms = optimal_model.get_topic_terms(top)
-    #    topic_inx = [topic_term[0] for topic_term in topic_terms]
-    #    words = [dct[id_] for id_ in topic_inx]
-    #    print(words)
+    optimal_topics, _ = ilda.find_optimal_topics(level="level_one")
+    optimal_model = ilda.find_optimal_model(level="level_one")
 
-    #df = format_topics_sentences(optimal_model, corpus, raw_texts, doc_paths)
-    #df.to_csv("test.csv")
-    # next step in the pipeline is to slice the df into rows by dominant
-    # topic value and to train submodels for each of the
-    # slices of rows.
-    # for each value in dominant topic, train a submodel that splits the
-    # group into at most five topics.
+    dominant_topic_per_doc = ilda.format_topics_sentences(
+        optimal_model,
+        ilda.corpus,
+        ilda.tokens,
+        ilda.doc_paths)
+    dominant_topic_per_doc.to_csv("test.csv", index=False)
+    for topic_num in range(optimal_topics):
+        sub_df = dominant_topic_per_doc[dominant_topic_per_doc["dom_topic"] == topic_num]
+        print(sub_df.columns)
+        # TODO: replace the 0 with doc_path in format_topic_sentences
+        # function
+        sub_docs = sub_df["doc_path"].tolist()
+        ilda = iLDA(doc_paths=sub_docs,
+                    string_filters=string_filters,
+                    topic_range = range(2, 10),
+                    **kwargs)
 
-    #print(ilda.get_models_coherence())
-    #print(ilda.get_first_set_models())
+        ilda.set_attributes(with_bigrams=True)
+        ilda.train_models(level="level_one")
+        ilda.train_coherence(level="level_one")
+        ilda.vis_topics_coherences(level="level_one")
+        optimal_topics, _ = ilda.find_optimal_topics(level="level_one")
+        optimal_model = ilda.find_optimal_model(level="level_one")
+
+        dominant_topic_per_doc_sub = ilda.format_topics_sentences(
+            optimal_model,
+            ilda.corpus,
+            ilda.tokens,
+            ilda.doc_paths)
+        dominant_topic_per_doc_sub.to_csv(f"level_two_{topic_num}.csv", index=False)
 
 if __name__ == "__main__":
     main()
