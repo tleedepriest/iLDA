@@ -56,19 +56,18 @@ class iLDA:
         self.tokens = None
         self.corpus = None
         self.id2word = None
-        if model_eval_info is None:
-            sub_dict = {"models":[],
-                        "num_topics_coherence":[],
-                        "optimal_model": None}
+        self.model_eval_info = {"models":[],
+                                "num_topics_coherence":[],
+                                "optimal_model": None}
 
-            self.model_eval_info = {"level_one": sub_dict,
-                                    "level_two": sub_dict,
-                                    "level_three": sub_dict}
+#            self.model_eval_info = {"level_one": sub_dict,
+#                                    "level_two": sub_dict,
+#                                    "level_three": sub_dict}
 
 
     # TODO: change name to set_optimal_model. Have it only set a value
     # and return nothing.
-    def find_optimal_model(self, level):
+    def find_optimal_model(self):
         """
         Parameters
         --------------
@@ -76,7 +75,7 @@ class iLDA:
         Notes:
         Sets 'optimal_model' value in model_eval_info dictionary"
         """
-        models = self.model_eval_info[level]["models"]
+        models = self.model_eval_info["models"]
         (optimal_topics,
          optimal_model_index) = self.find_optimal_topics(level)
         optimal_model = models[optimal_model_index]
@@ -103,7 +102,7 @@ class iLDA:
 #                         "! You have to run train_models and\n"
 #                         "train_coherence first!")
 
-    def find_optimal_topics(self, level):
+    def find_optimal_topics(self):
         """
         Parameters
         -------------
@@ -155,116 +154,81 @@ class iLDA:
                          "train_coherence first!")
 
 
-    def vis_topics_coherences(self, level):
+    def vis_topics_coherences(self):
         """
         Visualizes coherence vs number of topics.
         """
-        num_topics = self.get_num_topics(level)
-        coherence = self.get_coherences(level)
+        num_topics = self.get_num_topics()
+        coherence = self.get_coherences()
         if num_topics!=[]:
             fig = plt.figure()
             ax = fig.add_subplot(111)
 
             ax.plot(num_topics, coherence)
-            optimal_topics, _ = self.find_optimal_topics(level)
+            optimal_topics, _ = self.find_optimal_topics()
             coherence = [round(co, 3) for co in coherence]
             for xy in zip(num_topics, coherence):
                 ax.annotate('(%s, %s)' % xy, xy=xy, textcoords='data')
             ax.grid()
             plt.axvline(optimal_topics)
-            plt.savefig(f"{level}_{optimal_topics}.png")
+            plt.savefig(f"{optimal_topics}.png")
             return None
         # TO-DO: change this to better type of error?
         raise ValueError("There are no topics or coherence values to\n"
                          "Visualize! You have to run train_models and\n"
                          "train_coherence first!")
 
-    def get_num_topics(self, level):
+    def get_num_topics(self):
         """
         Parameters
         --------------
-        level: str
-            'level_one', 'level_two', 'level_three'
-
         Returns
         -------------
             :List[float]
             A list of topic numbers for each model, ASC order
         """
-        num_tops_cos = self.model_eval_info[level]["num_topics_coherence"]
+        num_tops_cos = self.model_eval_info["num_topics_coherence"]
         return [num_top_co[0] for num_top_co in num_tops_cos]
 
-    def get_coherences(self, level):
+    def get_coherences(self):
         """
-        Parameters
-        --------------
-        level: str
-            'level_one', 'level_two', 'level_three'
-
         Returns
         -------------
             :List[float]
             A list of coherence values in the same order as ascending
             topic_number order.
         """
-        num_tops_cos = self.model_eval_info[level]["num_topics_coherence"]
+        num_tops_cos = self.model_eval_info["num_topics_coherence"]
         return [num_top_co[1] for num_top_co in num_tops_cos]
 
 
-    def train_models_over_range(self, topic_range, level):
+    def train_models_over_range(self, topic_range):
         """
-        trains multiple models to find the optimal model for the firs
+        trains multiple models to find the optimal model.
+        Saves the model locally in temp folder and stores the path.
         """
         for num_topic in topic_range:
             model = LdaModel(corpus=self.corpus,
                              num_topics=num_topic,
                              id2word=self.id2word)
-            # need to describe more here. include topic num
-            # in addition to level and num_topic..if available..
-            # only available for second and third levels.
-            temp_filepath = datapath(f"model_{level}_{num_topic}")
+            temp_filepath = datapath(f"model_{num_topic}")
             model.save(temp_filepath)
-            self.model_eval_info[level]["models"].append(temp_filepath)
+            self.model_eval_info["models"].append(temp_filepath)
             del model
 
-    def train_models(self, level):
+    def train_models(self):
         """
-        trains models. sets models key value to list of models.
+        Convience method that calls train_models_over_range.
         """
-        if level == "level_one":
-            self.train_models_over_range(self.topic_range, level)
-        elif level == "level_two":
-            optimal_seed_model = self.model_eval_info["level_one"]["optimal_model"]
-            # psuedo code
-            # ---------------
-            # for group in optimal_seed_model:
-                    # rederive corpus and tokens
-                    # set new model attributes with set_attributes
-                    # method.
-            #       train_models_over_range(self.level_two_range)
-            # going to need to itterate through model with corpus to
-            # get each document and what group. Recreate and set
-            # corpus for each of teh groups and train model range of
-            # models in topic_nums for each group split.
+        self.train_models_over_range(self.topic_range)
 
-        else:
-            pass
-            # need to itterate over all optimal_two_models,
-            # then split these into groups
-            # then train each group over a range of values.
-            # pseudo code
-            #----------------
-            # for optimal_model in optimal_models:
-            #       for group in optimal_model:
-            #           train_models_over_range(self.level_three_range)
-
-    def train_coherence(self, level):
+    def train_coherence(self):
         """
         returns a list of tuples with the number of topics and the
         coherence
         This allows for easy evaluation of models.
         """
-        models = self.model_eval_info[level]["models"]
+        models = self.model_eval_info["models"]
         for num_topic, model in zip(
             self.topic_range,
             models):
@@ -275,7 +239,7 @@ class iLDA:
                     texts=self.tokens,
                     coherence='c_v')
             coherence = cm.get_coherence()
-            self.model_eval_info[level]["num_topics_coherence"].append(
+            self.model_eval_info["num_topics_coherence"].append(
                     (num_topic, coherence))
             del model
 
@@ -390,34 +354,25 @@ def main():
                       remove_stopwords,
                       strip_short]
 
-    # will likely get rid of this, just wanted to explore **kwardg
-    # with setting attributes.
-    kwargs = {"seed_model_max_topics":10,
-              "seed_model_step":2,
-              "level_two_max_topics": 10
-            }
-
     ilda = iLDA(docs_dir="20news_home/",
                 string_filters=string_filters,
-                topic_range = range(2, 40, 2),
-                **kwargs)
+                topic_range = range(2, 40, 2))
 
-    # could wrap each of these in luigi pipeline....
-    # would need someway to pass instantiation between
-    # classes...hmmmm
     ilda.set_attributes(with_bigrams=True)
-    ilda.train_models(level="level_one")
-    ilda.train_coherence(level="level_one")
-    ilda.vis_topics_coherences(level="level_one")
-    optimal_topics, _ = ilda.find_optimal_topics(level="level_one")
-    optimal_model = ilda.find_optimal_model(level="level_one")
+    ilda.train_models()
+    ilda.train_coherence()
+    ilda.vis_topics_coherences()
+    optimal_topics, _ = ilda.find_optimal_topics()
+    optimal_model = ilda.find_optimal_model()
 
     dominant_topic_per_doc = ilda.format_topics_sentences(
         optimal_model,
         ilda.corpus,
         ilda.tokens,
         ilda.doc_paths)
+
     dominant_topic_per_doc.to_csv("test.csv", index=False)
+
     for topic_num in range(optimal_topics):
         sub_df = dominant_topic_per_doc[dominant_topic_per_doc["dom_topic"] == topic_num]
         print(sub_df.columns)
@@ -430,11 +385,11 @@ def main():
                     **kwargs)
 
         ilda.set_attributes(with_bigrams=True)
-        ilda.train_models(level="level_one")
-        ilda.train_coherence(level="level_one")
-        ilda.vis_topics_coherences(level="level_one")
-        optimal_topics, _ = ilda.find_optimal_topics(level="level_one")
-        optimal_model = ilda.find_optimal_model(level="level_one")
+        ilda.train_models()
+        ilda.train_coherence()
+        ilda.vis_topics_coherences()
+        optimal_topics, _ = ilda.find_optimal_topics()
+        optimal_model = ilda.find_optimal_model()
 
         dominant_topic_per_doc_sub = ilda.format_topics_sentences(
             optimal_model,
