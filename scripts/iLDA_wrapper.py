@@ -33,7 +33,6 @@ class iLDA:
                  doc_paths=None,
                  string_filters=None,
                  topic_range=None,
-                 hierarchy_levels=3,
                  model_eval_info=None,
                  original_lda_model=None,
                  **kwargs):
@@ -42,7 +41,6 @@ class iLDA:
         # number of levels to the hierarchy.
 
         self.__dict__.update(kwargs)
-        self.hierarchy_levels = len(kwargs.items())
         self.docs_dir = docs_dir
         # support directory path or list of document paths
         if self.docs_dir is None:
@@ -104,10 +102,6 @@ class iLDA:
 
     def find_optimal_topics(self):
         """
-        Parameters
-        -------------
-        level: str
-            'level_one', 'level_two', 'level_three'
         Returns
         -------------
         optimal topics: int
@@ -118,8 +112,8 @@ class iLDA:
         ascending order.Index can be used to get optimal model
         in models list
         """
-        num_topics = self.get_num_topics(level)
-        coherence = self.get_coherences(level)
+        num_topics = self.get_num_topics()
+        coherence = self.get_coherences()
         # perpendicular distance each data point is from
         # a line connecting first and last datapoint.
         distances = []
